@@ -13,7 +13,7 @@ RUN npm install && npm run build
 # Build puppeteer-agent
 WORKDIR /workspace/puppeteer-agent
 COPY implementation/client/puppeteer-replay-agent /workspace/puppeteer-agent
-RUN npm install && npm run build
+RUN npm install /workspace/client-node --no-save && npm install && npm run build
 
 # Stage 2: Runtime
 FROM node:22-slim
