@@ -1,5 +1,5 @@
 {
-  "name": "puppeteer-replay-agent",
+  "name": "teststate-puppeteer-replay-agent",
   "version": "1.0.0",
   "description": "TestState Client Agent",
   "type": "module",
