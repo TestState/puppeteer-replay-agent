@@ -6,8 +6,8 @@ WORKDIR /workspace
 COPY specification /specification
 
 # Build shared library
-COPY implementation/client/client-node /workspace/teststate-client-node
-WORKDIR /workspace/teststate-client-node
+COPY implementation/client/client-node /workspace/client-node
+WORKDIR /workspace/client-node
 RUN npm install && npm run build
 
 # Build puppeteer-agent
@@ -66,7 +66,7 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Copy built library and agent
-COPY --from=build --chown=node:node /workspace/teststate-client-node /app/teststate-client-node
+COPY --from=build --chown=node:node /workspace/client-node /app/client-node
 COPY --from=build --chown=node:node /workspace/puppeteer-agent /app/puppeteer-agent
 
 USER node
