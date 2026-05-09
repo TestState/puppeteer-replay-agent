@@ -15,7 +15,7 @@ import {
     SummarySchema,
     Attachment,
     AttachmentSchema
-} from "testgenesis-client-node";
+} from "teststate-client-node";
 
 import puppeteer from "puppeteer";
 import * as os from "os";
@@ -23,7 +23,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {createRunner, parse, PuppeteerRunnerExtension, Step, UserFlow} from "@puppeteer/replay";
 
-class TestGenesisRunnerExtension extends PuppeteerRunnerExtension {
+class TestStateRunnerExtension extends PuppeteerRunnerExtension {
     public reports: StepReport[] = [];
     public attachments: Attachment[] = [];
     public stepStartTime: number = 0;
@@ -132,7 +132,7 @@ export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
 
         const startTime = new Date();
         let browser: puppeteer.Browser | null = null;
-        let extension: TestGenesisRunnerExtension | undefined;
+        let extension: TestStateRunnerExtension | undefined;
         let recordingTitle = "Unknown";
         let takeScreenshot = false;
         let screenshotOptions: puppeteer.ScreenshotOptions = {
@@ -215,7 +215,7 @@ export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
 
             browser = await puppeteer.launch(launchOptions);
             const page = await browser.newPage();
-            extension = new TestGenesisRunnerExtension(browser, page, context, takeScreenshot, screenshotOptions);
+            extension = new TestStateRunnerExtension(browser, page, context, takeScreenshot, screenshotOptions);
             const runner = await createRunner(recording, extension);
 
             const browserVersion = await browser.version();
@@ -323,7 +323,7 @@ export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
         }
     }
 
-    private getCommonMetadata(recordingTitle: string, browserVersion: string, launchOptions: any, prefs: any, duration: number, extension?: TestGenesisRunnerExtension) {
+    private getCommonMetadata(recordingTitle: string, browserVersion: string, launchOptions: any, prefs: any, duration: number, extension?: TestStateRunnerExtension) {
         const actualArgs = (extension as any)?.browserObj?.process()?.spawnargs || launchOptions.args;
         return {
             recording_title: recordingTitle,

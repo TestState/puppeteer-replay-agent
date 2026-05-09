@@ -7,7 +7,7 @@ import {
     TranslationSessionContext,
     TranslationSessionProcessor,
     TranslationState
-} from "testgenesis-client-node";
+} from "teststate-client-node";
 import * as crypto from "crypto";
 import {Step, StepType, UserFlow} from "@puppeteer/replay";
 import type {CommandShape, TestShape} from "@seleniumhq/side-model";

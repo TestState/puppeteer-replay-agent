@@ -1,4 +1,4 @@
-import {Agent} from "testgenesis-client-node";
+import {Agent} from "teststate-client-node";
 import {parseArgs} from "node:util";
 import {PuppeteerReplayTestProcessor} from "./processor.js";
 import {PuppeteerToSideTranslationProcessor} from "./translation-processor.js";
