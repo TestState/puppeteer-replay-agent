@@ -46,8 +46,8 @@ class TestStateRunnerExtension extends PuppeteerRunnerExtension {
     public getStepDetail(step: Step): string {
         const parts: string[] = [step.type];
         if ("url" in step) parts.push(`(${step.url})`);
-        if ("selector" in step) {
-            const selector = Array.isArray(step.selector) ? step.selector[0] : step.selector;
+        if ("selectors" in step) {
+            const selector = Array.isArray(step.selectors) ? step.selectors[0] : step.selectors;
             parts.push(`on ${selector}`);
         }
         if ("value" in step) parts.push(`with "${step.value}"`);
