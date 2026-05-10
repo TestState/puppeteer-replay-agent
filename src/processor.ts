@@ -106,7 +106,7 @@ class TestStateRunnerExtension extends PuppeteerRunnerExtension {
         });
 
         this.reports.push(report);
-        await this.context.sendTelemetry(`[Step End] ${step.type} complete (${duration}ms).`, Severity.INFO);
+        await this.context.sendTelemetry(`[Step End] ${detail} complete.`, Severity.INFO);
     }
 }
 
