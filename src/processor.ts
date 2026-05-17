@@ -145,6 +145,7 @@ export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
 
         let launchOptions: any = {
             headless: true,
+            dumpio: true,
             args: [
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
@@ -154,7 +155,11 @@ export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--disable-extensions",
-                "--mute-audio"
+                "--mute-audio",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--disable-ipc-flooding-protection"
             ]
         };
 
