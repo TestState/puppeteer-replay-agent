@@ -64,6 +64,7 @@ RUN apt-get update && apt-get install -y \
 # Environment variables to configure Puppeteer to use the system Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV DBUS_SESSION_BUS_ADDRESS=/dev/null
 
 # Copy built library and agent
 COPY --from=build --chown=node:node /workspace/client-node /app/client-node

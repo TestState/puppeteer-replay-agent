@@ -145,7 +145,17 @@ export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
 
         let launchOptions: any = {
             headless: true,
-            args: []
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-extensions",
+                "--mute-audio"
+            ]
         };
 
         const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "puppeteer-profile-"));
