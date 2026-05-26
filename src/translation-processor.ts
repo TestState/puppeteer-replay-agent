@@ -107,7 +107,9 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                 id: crypto.randomUUID(),
                 command: "select window",
                 target: `handle=${step.target}`,
-                value: ""
+                targets: [],
+                value: "",
+                comment: ""
             });
             this.currentTarget = step.target;
         }
@@ -119,7 +121,9 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                     id: crypto.randomUUID(),
                     command: "select frame",
                     target: `index=${frameIndex}`,
-                    value: ""
+                    targets: [],
+                    value: "",
+                    comment: ""
                 });
             }
         } else if ("frame" in step) {
@@ -129,7 +133,9 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                 id: crypto.randomUUID(),
                 command: "select frame",
                 target: "relative=top",
-                value: ""
+                targets: [],
+                value: "",
+                comment: ""
             });
         }
     }
@@ -141,95 +147,128 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                     id: crypto.randomUUID(),
                     command: "open",
                     target: step.url,
-                    value: ""
+                    targets: [],
+                    value: "",
+                    comment: ""
                 }];
 
-            case StepType.Click:
+            case StepType.Click: {
+                const { target, targets } = this.translateSelectors(step.selectors);
                 return [{
                     id: crypto.randomUUID(),
                     command: "click",
-                    target: this.translateSelector(step.selectors),
-                    value: step.button === "secondary" ? "button=2" : ""
+                    target,
+                    targets,
+                    value: step.button === "secondary" ? "button=2" : "",
+                    comment: ""
                 }];
+            }
 
-            case StepType.DoubleClick:
+            case StepType.DoubleClick: {
+                const { target, targets } = this.translateSelectors(step.selectors);
                 return [{
                     id: crypto.randomUUID(),
                     command: "doubleClick",
-                    target: this.translateSelector(step.selectors),
-                    value: ""
+                    target,
+                    targets,
+                    value: "",
+                    comment: ""
                 }];
+            }
 
-            case StepType.Hover:
+            case StepType.Hover: {
+                const { target, targets } = this.translateSelectors(step.selectors);
                 return [{
                     id: crypto.randomUUID(),
                     command: "mouseOver",
-                    target: this.translateSelector(step.selectors),
-                    value: ""
+                    target,
+                    targets,
+                    value: "",
+                    comment: ""
                 }];
+            }
 
-            case StepType.Change:
+            case StepType.Change: {
+                const { target, targets } = this.translateSelectors(step.selectors);
                 return [{
                     id: crypto.randomUUID(),
                     command: "type",
-                    target: this.translateSelector(step.selectors),
-                    value: step.value
+                    target,
+                    targets,
+                    value: step.value,
+                    comment: ""
                 }];
+            }
 
             case StepType.SetViewport:
                 return [{
                     id: crypto.randomUUID(),
                     command: "setWindowSize",
                     target: `${step.width}x${step.height}`,
-                    value: ""
+                    targets: [],
+                    value: "",
+                    comment: ""
                 }];
 
-            case StepType.WaitForElement:
+            case StepType.WaitForElement: {
+                const { target, targets } = this.translateSelectors(step.selectors);
                 return [{
                     id: crypto.randomUUID(),
                     command: "waitForElementPresent",
-                    target: this.translateSelector(step.selectors),
-                    value: String(step.timeout || 30000)
+                    target,
+                    targets,
+                    value: String(step.timeout || 30000),
+                    comment: ""
                 }];
+            }
 
             case StepType.WaitForExpression:
                 return [{
                     id: crypto.randomUUID(),
                     command: "waitForCondition",
                     target: step.expression,
-                    value: String(step.timeout || 30000)
+                    targets: [],
+                    value: String(step.timeout || 30000),
+                    comment: ""
                 }];
 
-            case StepType.Scroll:
+            case StepType.Scroll: {
                 if ("selectors" in step) {
-                    const locator = this.translateSelector((step as any).selectors);
-                    const script = locator.startsWith("xpath=")
-                        ? `document.evaluate("${locator.substring(6)}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.scrollIntoView()`
-                        : `document.querySelector("${locator.substring(4)}").scrollIntoView()`;
+                    const { target, targets } = this.translateSelectors((step as any).selectors);
+                    const script = target.startsWith("xpath=")
+                        ? `document.evaluate("${target.substring(6)}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.scrollIntoView()`
+                        : `document.querySelector("${target.startsWith("css=") ? target.substring(4) : target}").scrollIntoView()`;
                     return [{
                         id: crypto.randomUUID(),
                         command: "runScript",
                         target: script,
-                        value: ""
+                        targets: [],
+                        value: "",
+                        comment: ""
                     }];
                 }
                 return [{
                     id: crypto.randomUUID(),
                     command: "runScript",
                     target: `window.scrollTo(${step.x || 0}, ${step.y || 0})`,
-                    value: ""
+                    targets: [],
+                    value: "",
+                    comment: ""
                 }];
+            }
 
             case StepType.Close:
                 return [{
                     id: crypto.randomUUID(),
                     command: "close",
                     target: "",
-                    value: ""
+                    targets: [],
+                    value: "",
+                    comment: ""
                 }];
 
             case StepType.KeyDown:
-            case StepType.KeyUp:
+            case StepType.KeyUp: {
                 const keyMap: Record<string, string> = {
                     "Enter": "${KEY_ENTER}",
                     "Tab": "${KEY_TAB}",
@@ -266,24 +305,29 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                 const mappedKey = keyMap[step.key] || (step.key.length === 1 ? step.key : null);
                 
                 if (mappedKey) {
-                    const target = ("selectors" in step) 
-                        ? this.translateSelector((step as any).selectors) 
-                        : "xpath=//body";
+                    const { target, targets } = ("selectors" in step) 
+                        ? this.translateSelectors((step as any).selectors) 
+                        : { target: "xpath=//body", targets: [["xpath=//body", "xpath"]] as [string, string][] };
                     return [{
                         id: crypto.randomUUID(),
                         command: "sendKeys",
                         target,
-                        value: mappedKey
+                        targets,
+                        value: mappedKey,
+                        comment: ""
                     }];
                 }
                 return null;
+            }
 
             case StepType.CustomStep:
                 return [{
                     id: crypto.randomUUID(),
                     command: "echo",
                     target: `Custom Step: ${step.name}`,
-                    value: ""
+                    targets: [],
+                    value: "",
+                    comment: ""
                 }];
 
             default:
@@ -291,49 +335,46 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
         }
     }
 
-    private translateSelector(selectors: any): string {
-        if (!selectors || selectors.length === 0) return "document";
+    private translateSelectors(selectors: any): { target: string; targets: [string, string][] } {
+        if (!selectors || selectors.length === 0) {
+            return { target: "xpath=//body", targets: [["xpath=//body", "xpath"]] };
+        }
 
         const allSelectors = Array.isArray(selectors) ? selectors : [selectors];
-        
-        // Tier 1: Look for simple ID selectors (safest)
+        const targets: [string, string][] = [];
+
         for (const s of allSelectors) {
             const part = Array.isArray(s) ? s[s.length - 1] : s;
+            if (typeof part !== "string") continue;
+
+            let locator = "";
+            let strategy = "css";
+
             if (part.startsWith("#") && !part.includes(" ") && !part.includes(".") && !part.includes("[") && !part.includes(">")) {
-                return `css=${part}`;
-            }
-        }
-
-        // Tier 2: ARIA / Text (high compatibility)
-        for (const s of allSelectors) {
-            const part = Array.isArray(s) ? s[s.length - 1] : s;
-            if (part.startsWith("aria/") || part.startsWith("text/")) {
+                locator = `id=${part.substring(1)}`;
+                strategy = "id";
+            } else if (part.startsWith("aria/") || part.startsWith("text/")) {
                 const label = part.replace(/^(aria|text)\//, "");
-                return `xpath=//*[contains(text(), '${label}')]`;
+                locator = `xpath=//*[contains(text(), '${label}')]`;
+                strategy = "xpath";
+            } else if (part.startsWith("xpath/")) {
+                locator = `xpath=${part.substring(6)}`;
+                strategy = "xpath";
+            } else if (part.startsWith("css/")) {
+                locator = `css=${part.substring(4)}`;
+                strategy = "css";
+            } else {
+                locator = `css=${part}`;
+                strategy = "css";
             }
+
+            targets.push([locator, strategy]);
         }
 
-        // Tier 3: XPath (precise)
-        for (const s of allSelectors) {
-            const part = Array.isArray(s) ? s[s.length - 1] : s;
-            if (part.startsWith("xpath/")) {
-                return `xpath=${part.substring(6)}`;
-            }
+        if (targets.length === 0) {
+            return { target: "xpath=//body", targets: [["xpath=//body", "xpath"]] };
         }
 
-        // Tier 4: CSS / Pierce
-        for (const s of allSelectors) {
-            const part = Array.isArray(s) ? s[s.length - 1] : s;
-            if (part.startsWith("css/")) {
-                return `css=${part.substring(4)}`;
-            }
-            if (!part.includes("/") && !part.startsWith("pierce/")) {
-                return `css=${part}`;
-            }
-        }
-        
-        // Final Fallback: Literal first selector
-        const first = Array.isArray(allSelectors[0]) ? allSelectors[0][allSelectors[0].length - 1] : allSelectors[0];
-        return `css=${first.replace(/^(css|xpath|aria|text)\//, "")}`;
+        return { target: targets[0][0], targets };
     }
 }
