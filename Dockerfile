@@ -23,6 +23,8 @@ WORKDIR /app
 # Using the system-provided chromium ensures that all shared libraries are correctly mapped
 RUN apt-get update && apt-get install -y \
     chromium \
+    xvfb \
+    xauth \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -77,5 +79,5 @@ WORKDIR /app/puppeteer-agent
 ENV HUB_URL=http://cms:9000
 ENV CLIENT_NAME=DockerPuppeteerAgent
 
-# Run the compiled JavaScript directly with Node
-CMD ["node", "dist/index.js"]
+# Run the compiled JavaScript directly with Node under xvfb-run for virtual display support
+CMD ["xvfb-run", "-a", "-s", "-screen 0 1024x768x24", "node", "dist/index.js"]
