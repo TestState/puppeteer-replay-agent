@@ -35,6 +35,9 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
 
     public async process(sessionId: string, context: TranslationSessionContext) {
         try {
+            this.skipNextStep = false;
+            this.currentTarget = "main";
+
             await context.sendStatus({
                 state: TranslationState.ACKNOWLEDGED,
                 message: "Starting Puppeteer-to-SIDE translation..."
@@ -54,13 +57,21 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
 
             const sideCommands: CommandShape[] = [];
 
-            for (const step of recording.steps) {
+            for (let i = 0; i < recording.steps.length; i++) {
+                const step = recording.steps[i];
+
                 // Pre-step: Handle Frame/Window Context
                 this.appendContextCommands(sideCommands, step);
 
-                const translated = this.translateStep(step);
+                const nextStep = recording.steps[i + 1];
+                const translated = this.translateStep(step, nextStep);
                 if (translated) {
                     sideCommands.push(...translated);
+                }
+
+                if (this.skipNextStep) {
+                    this.skipNextStep = false;
+                    i++;
                 }
             }
 
@@ -99,6 +110,7 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
     }
 
     private currentTarget = "main";
+    private skipNextStep = false;
 
     private appendContextCommands(commands: CommandShape[], step: Step) {
         // Handle Target (Tabs/Windows)
@@ -140,7 +152,7 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
         }
     }
 
-    private translateStep(step: Step): CommandShape[] | null {
+    private translateStep(step: Step, nextStep?: Step): CommandShape[] | null {
         switch (step.type) {
             case StepType.Navigate:
                 return [{
@@ -267,8 +279,15 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                     comment: ""
                 }];
 
-            case StepType.KeyDown:
-            case StepType.KeyUp: {
+            case StepType.KeyDown: {
+                if (!("key" in step)) return null;
+                const key = (step as any).key;
+
+                const isPair = nextStep &&
+                    nextStep.type === StepType.KeyUp &&
+                    "key" in nextStep &&
+                    (nextStep as any).key === key;
+
                 const keyMap: Record<string, string> = {
                     "Enter": "${KEY_ENTER}",
                     "Tab": "${KEY_TAB}",
@@ -302,7 +321,75 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                     "F12": "${KEY_F12}"
                 };
 
-                const mappedKey = keyMap[step.key] || (step.key.length === 1 ? step.key : null);
+                const mappedKey = keyMap[key] || (key.length === 1 ? key : null);
+                
+                if (mappedKey) {
+                    const { target, targets } = ("selectors" in step) 
+                        ? this.translateSelectors((step as any).selectors) 
+                        : { target: "xpath=//body", targets: [["xpath=//body", "xpath"]] as [string, string][] };
+
+                    if (isPair) {
+                        this.skipNextStep = true;
+                        return [{
+                            id: crypto.randomUUID(),
+                            command: key.length === 1 ? "type" : "sendKeys",
+                            target,
+                            targets,
+                            value: mappedKey,
+                            comment: ""
+                        }];
+                    }
+
+                    return [{
+                        id: crypto.randomUUID(),
+                        command: "sendKeys",
+                        target,
+                        targets,
+                        value: mappedKey,
+                        comment: ""
+                    }];
+                }
+                return null;
+            }
+
+            case StepType.KeyUp: {
+                if (!("key" in step)) return null;
+                const key = (step as any).key;
+
+                const keyMap: Record<string, string> = {
+                    "Enter": "${KEY_ENTER}",
+                    "Tab": "${KEY_TAB}",
+                    "Escape": "${KEY_ESC}",
+                    "Backspace": "${KEY_BACKSPACE}",
+                    "Delete": "${KEY_DELETE}",
+                    "ArrowUp": "${KEY_UP}",
+                    "ArrowDown": "${KEY_DOWN}",
+                    "ArrowLeft": "${KEY_LEFT}",
+                    "ArrowRight": "${KEY_RIGHT}",
+                    "Home": "${KEY_HOME}",
+                    "End": "${KEY_END}",
+                    "PageUp": "${KEY_PAGE_UP}",
+                    "PageDown": "${KEY_PAGE_DOWN}",
+                    "Insert": "${KEY_INSERT}",
+                    "Shift": "${KEY_SHIFT}",
+                    "Control": "${KEY_CONTROL}",
+                    "Alt": "${KEY_ALT}",
+                    "Meta": "${KEY_META}",
+                    "F1": "${KEY_F1}",
+                    "F2": "${KEY_F2}",
+                    "F3": "${KEY_F3}",
+                    "F4": "${KEY_F4}",
+                    "F5": "${KEY_F5}",
+                    "F6": "${KEY_F6}",
+                    "F7": "${KEY_F7}",
+                    "F8": "${KEY_F8}",
+                    "F9": "${KEY_F9}",
+                    "F10": "${KEY_F10}",
+                    "F11": "${KEY_F11}",
+                    "F12": "${KEY_F12}"
+                };
+
+                const mappedKey = keyMap[key] || (key.length === 1 ? key : null);
                 
                 if (mappedKey) {
                     const { target, targets } = ("selectors" in step) 
@@ -319,7 +406,6 @@ export class PuppeteerToSideTranslationProcessor implements TranslationSessionPr
                 }
                 return null;
             }
-
             case StepType.CustomStep:
                 return [{
                     id: crypto.randomUUID(),
