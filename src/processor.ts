@@ -110,6 +110,93 @@ class TestStateRunnerExtension extends PuppeteerRunnerExtension {
     }
 }
 
+class BrowserQueue {
+    private activeCount = 0;
+    private readonly limit: number;
+    private readonly waiting: Array<{
+        resolve: () => void;
+        reject: (err: any) => void;
+        sessionId: string;
+        abortSignal?: AbortSignal;
+        onAbort?: () => void;
+    }> = [];
+
+    constructor(limit: number) {
+        this.limit = limit;
+        console.log(`[BrowserQueue] Initialized with limit: ${this.limit}`);
+    }
+
+    public async acquire(sessionId: string, abortSignal?: AbortSignal): Promise<void> {
+        if (abortSignal?.aborted) {
+            throw new Error("Session was aborted before browser acquisition");
+        }
+
+        if (this.activeCount < this.limit) {
+            this.activeCount++;
+            console.log(`[BrowserQueue][${sessionId}] Acquired slot immediately. Active: ${this.activeCount}/${this.limit}`);
+            return;
+        }
+
+        console.log(`[BrowserQueue][${sessionId}] No slots available. Waiting in queue... Active: ${this.activeCount}/${this.limit}`);
+
+        return new Promise<void>((resolve, reject) => {
+            const onAbort = () => {
+                const idx = this.waiting.findIndex(item => item.sessionId === sessionId);
+                if (idx !== -1) {
+                    this.waiting.splice(idx, 1);
+                }
+                console.log(`[BrowserQueue][${sessionId}] Session aborted/disconnected while waiting in queue.`);
+                reject(new Error("Session aborted while waiting for a browser slot"));
+            };
+
+            if (abortSignal) {
+                abortSignal.addEventListener("abort", onAbort);
+            }
+
+            this.waiting.push({
+                resolve: () => {
+                    if (abortSignal) {
+                        abortSignal.removeEventListener("abort", onAbort);
+                    }
+                    resolve();
+                },
+                reject: (err) => {
+                    if (abortSignal) {
+                        abortSignal.removeEventListener("abort", onAbort);
+                    }
+                    reject(err);
+                },
+                sessionId,
+                abortSignal,
+                onAbort
+            });
+        });
+    }
+
+    public release(sessionId: string) {
+        this.activeCount--;
+        console.log(`[BrowserQueue][${sessionId}] Released slot. Active: ${this.activeCount}/${this.limit}`);
+        this.processQueue();
+    }
+
+    private processQueue() {
+        while (this.activeCount < this.limit && this.waiting.length > 0) {
+            const next = this.waiting.shift();
+            if (next) {
+                if (next.abortSignal?.aborted) {
+                    continue;
+                }
+                this.activeCount++;
+                console.log(`[BrowserQueue][${next.sessionId}] Acquired slot from queue. Active: ${this.activeCount}/${this.limit}`);
+                next.resolve();
+            }
+        }
+    }
+}
+
+const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_BROWSERS || "1", 10);
+const browserQueue = new BrowserQueue(maxConcurrent);
+
 export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
     public getCapability() {
         return testCapability({
@@ -124,217 +211,228 @@ export class PuppeteerReplayTestProcessor implements TestSessionProcessor {
     public async process(sessionId: string, context: TestSessionContext) {
         console.log(`[PuppeteerReplay] Processing session: ${sessionId}`);
 
-        // 1. Initial Status
         await context.sendStatus({
             state: TestState.ACKNOWLEDGED,
-            message: "Extracting recording..."
+            message: "Waiting for an available browser slot..."
         });
 
-        const startTime = new Date();
-        let browser: puppeteer.Browser | null = null;
-        let extension: TestStateRunnerExtension | undefined;
-        let recordingTitle = "Unknown";
-        let takeScreenshot = false;
-        let screenshotOptions: puppeteer.ScreenshotOptions = {
-            type: "jpeg",
-            quality: 80,
-            optimizeForSpeed: true
-        };
-        let userPrefs: any = {};
-        let mergedPrefs: any = {};
-
-        let launchOptions: any = {
-            headless: true,
-            dumpio: true,
-            args: [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-software-rasterizer",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-extensions",
-                "--mute-audio",
-                "--disable-background-timer-throttling",
-                "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
-                "--disable-ipc-flooding-protection"
-            ]
-        };
-
-        const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "puppeteer-profile-"));
-        launchOptions.userDataDir = userDataDir;
+        await browserQueue.acquire(sessionId, context.abortSignal);
 
         try {
-            // 2. Extract Recording
-            const payload = context.init.payloads.find(p => p.type === "chrome-devtools-recorder");
-            if (!payload) {
-                throw new Error("Missing 'chrome-devtools-recorder' payload.");
-            }
-            if (!payload.attachment) {
-                throw new Error("Payload 'chrome-devtools-recorder' is missing an attachment.");
-            }
+            // 1. Initial Status
+            await context.sendStatus({
+                state: TestState.ACKNOWLEDGED,
+                message: "Extracting recording..."
+            });
 
-            const recordingText = new TextDecoder().decode(payload.attachment.data);
-            const recordingJson = JSON.parse(recordingText);
-            const recording = parse(recordingJson);
-            recordingTitle = recording.title;
-
-            // 3. Extract Config
-            const configPayload = context.init.payloads.find(p => p.type === "puppeteer-config");
-            if (configPayload?.attachment) {
-                try {
-                    const configText = new TextDecoder().decode(configPayload.attachment.data);
-                    const config = JSON.parse(configText);
-                    
-                    if (config.headless !== undefined) launchOptions.headless = config.headless;
-                    if (config.product) launchOptions.product = config.product;
-                    if (Array.isArray(config.args)) {
-                        launchOptions.args = [...launchOptions.args, ...config.args];
-                    }
-                    if (config.takeScreenshot !== undefined) {
-                        takeScreenshot = config.takeScreenshot;
-                    }
-                    if (config.screenshotConfig) {
-                        screenshotOptions = { ...screenshotOptions, ...config.screenshotConfig };
-                    }
-                    if (config.prefs) {
-                        userPrefs = config.prefs;
-                    }
-                } catch (e) {
-                    await context.sendTelemetry(`Failed to parse puppeteer-config: ${e}`, Severity.WARN);
-                }
-            }
-
-            // 4. Pre-configure Preferences
-            const defaultDir = path.join(userDataDir, "Default");
-            fs.mkdirSync(defaultDir, { recursive: true });
-
-            mergedPrefs = {
-                profile: {
-                    password_manager_leak_detection: false,
-                    password_manager_enabled: false,
-                    password_manager_leak_detection_enabled: false,
-                    ...userPrefs.profile
-                },
-                credentials_enable_service: false,
-                ...userPrefs
+            const startTime = new Date();
+            let browser: puppeteer.Browser | null = null;
+            let extension: TestStateRunnerExtension | undefined;
+            let recordingTitle = "Unknown";
+            let takeScreenshot = false;
+            let screenshotOptions: puppeteer.ScreenshotOptions = {
+                type: "jpeg",
+                quality: 80,
+                optimizeForSpeed: true
             };
-            fs.writeFileSync(path.join(defaultDir, "Preferences"), JSON.stringify(mergedPrefs));
+            let userPrefs: any = {};
+            let mergedPrefs: any = {};
 
-            await context.sendStatus({
-                state: TestState.RUNNING,
-                message: "Launching browser and starting replay..."
-            });
+            let launchOptions: any = {
+                headless: true,
+                dumpio: true,
+                args: [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-extensions",
+                    "--mute-audio",
+                    "--disable-background-timer-throttling",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--disable-ipc-flooding-protection"
+                ]
+            };
 
-            browser = await puppeteer.launch(launchOptions);
-            const page = await browser.newPage();
-            extension = new TestStateRunnerExtension(browser, page, context, takeScreenshot, screenshotOptions);
-            const runner = await createRunner(recording, extension);
+            const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "puppeteer-profile-"));
+            launchOptions.userDataDir = userDataDir;
 
-            const browserVersion = await browser.version();
-
-            await context.sendTelemetry(`Started Puppeteer Replay runner on ${browserVersion}.`, Severity.INFO);
-            await runner.run();
-            await context.sendTelemetry("Puppeteer Replay runner finished successfully.", Severity.INFO);
-
-            // Capture final screenshot
-            if (takeScreenshot) {
-                try {
-                    const finalScreenshot = await page.screenshot(screenshotOptions);
-                    const ext = screenshotOptions.type || "png";
-                    extension.attachments.push(create(AttachmentSchema, {
-                        name: `final-screenshot.${ext}`,
-                        mimeType: extension.getMimeType(screenshotOptions.type),
-                        data: finalScreenshot as Uint8Array
-                    }));
-                } catch (e) {
-                    await context.sendTelemetry(`Failed to take final screenshot: ${e}`, Severity.WARN);
+            try {
+                // 2. Extract Recording
+                const payload = context.init.payloads.find(p => p.type === "chrome-devtools-recorder");
+                if (!payload) {
+                    throw new Error("Missing 'chrome-devtools-recorder' payload.");
                 }
-            }
+                if (!payload.attachment) {
+                    throw new Error("Payload 'chrome-devtools-recorder' is missing an attachment.");
+                }
 
-            const endTime = new Date();
-            const duration = endTime.getTime() - startTime.getTime();
+                const recordingText = new TextDecoder().decode(payload.attachment.data);
+                const recordingJson = JSON.parse(recordingText);
+                const recording = parse(recordingJson);
+                recordingTitle = recording.title;
 
-            // 4. Send Result
-            await context.sendResult({
-                status: {
-                    state: TestState.COMPLETED,
-                    message: "Replay finished successfully"
-                },
-                reports: extension.reports,
-                attachments: extension.attachments,
-                summary: create(SummarySchema, {
-                    startTime: timestampFromDate(startTime),
-                    totalDuration: msToDuration(duration),
-                    metadata: cleanObject({
-                        ...this.getCommonMetadata(recordingTitle, browserVersion, launchOptions, mergedPrefs, duration, extension)
-                    })
-                })
-            });
-            await context.sendStatus({
-                state: TestState.COMPLETED,
-                message: "Execution cycle finished."
-            });
-        } catch (err: any) {
-            console.error(`[PuppeteerReplay Error] ${err.message}`);
-            const endTime = new Date();
-            const duration = endTime.getTime() - startTime.getTime();
+                // 3. Extract Config
+                const configPayload = context.init.payloads.find(p => p.type === "puppeteer-config");
+                if (configPayload?.attachment) {
+                    try {
+                        const configText = new TextDecoder().decode(configPayload.attachment.data);
+                        const config = JSON.parse(configText);
+                        
+                        if (config.headless !== undefined) launchOptions.headless = config.headless;
+                        if (config.product) launchOptions.product = config.product;
+                        if (Array.isArray(config.args)) {
+                            launchOptions.args = [...launchOptions.args, ...config.args];
+                        }
+                        if (config.takeScreenshot !== undefined) {
+                            takeScreenshot = config.takeScreenshot;
+                        }
+                        if (config.screenshotConfig) {
+                            screenshotOptions = { ...screenshotOptions, ...config.screenshotConfig };
+                        }
+                        if (config.prefs) {
+                            userPrefs = config.prefs;
+                        }
+                    } catch (e) {
+                        await context.sendTelemetry(`Failed to parse puppeteer-config: ${e}`, Severity.WARN);
+                    }
+                }
 
-            // Try to add a failed report for the current step if it failed
-            if (extension && extension.currentStep) {
-                const lastReport = extension.reports[extension.reports.length - 1];
-                const currentStepDetail = extension.getStepDetail(extension.currentStep);
-                
-                if (!lastReport || lastReport.name !== currentStepDetail) {
-                    extension.reports.push(create(StepReportSchema, {
-                        name: currentStepDetail,
-                        status: StepStatus.FAILED,
-                        summary: create(SummarySchema, {
-                            startTime: timestampFromDate(new Date(extension.stepStartTime || Date.now())),
-                            totalDuration: msToDuration(Date.now() - (extension.stepStartTime || Date.now())),
-                            metadata: cleanObject({
-                                step: extension.currentStep,
-                                error: err.message
-                            })
+                // 4. Pre-configure Preferences
+                const defaultDir = path.join(userDataDir, "Default");
+                fs.mkdirSync(defaultDir, { recursive: true });
+
+                mergedPrefs = {
+                    profile: {
+                        password_manager_leak_detection: false,
+                        password_manager_enabled: false,
+                        password_manager_leak_detection_enabled: false,
+                        ...userPrefs.profile
+                    },
+                    credentials_enable_service: false,
+                    ...userPrefs
+                };
+                fs.writeFileSync(path.join(defaultDir, "Preferences"), JSON.stringify(mergedPrefs));
+
+                await context.sendStatus({
+                    state: TestState.RUNNING,
+                    message: "Launching browser and starting replay..."
+                });
+
+                browser = await puppeteer.launch(launchOptions);
+                const page = await browser.newPage();
+                extension = new TestStateRunnerExtension(browser, page, context, takeScreenshot, screenshotOptions);
+                const runner = await createRunner(recording, extension);
+
+                const browserVersion = await browser.version();
+
+                await context.sendTelemetry(`Started Puppeteer Replay runner on ${browserVersion}.`, Severity.INFO);
+                await runner.run();
+                await context.sendTelemetry("Puppeteer Replay runner finished successfully.", Severity.INFO);
+
+                // Capture final screenshot
+                if (takeScreenshot) {
+                    try {
+                        const finalScreenshot = await page.screenshot(screenshotOptions);
+                        const ext = screenshotOptions.type || "png";
+                        extension.attachments.push(create(AttachmentSchema, {
+                            name: `final-screenshot.${ext}`,
+                            mimeType: extension.getMimeType(screenshotOptions.type),
+                            data: finalScreenshot as Uint8Array
+                        }));
+                    } catch (e) {
+                        await context.sendTelemetry(`Failed to take final screenshot: ${e}`, Severity.WARN);
+                    }
+                }
+
+                const endTime = new Date();
+                const duration = endTime.getTime() - startTime.getTime();
+
+                // 4. Send Result
+                await context.sendResult({
+                    status: {
+                        state: TestState.COMPLETED,
+                        message: "Replay finished successfully"
+                    },
+                    reports: extension.reports,
+                    attachments: extension.attachments,
+                    summary: create(SummarySchema, {
+                        startTime: timestampFromDate(startTime),
+                        totalDuration: msToDuration(duration),
+                        metadata: cleanObject({
+                            ...this.getCommonMetadata(recordingTitle, browserVersion, launchOptions, mergedPrefs, duration, extension)
                         })
-                    }));
-                }
-            }
-
-            await context.sendResult({
-                status: {
-                    state: TestState.FAILED,
-                    message: `Replay failed: ${err.message}`
-                },
-                reports: extension?.reports || [],
-                attachments: extension?.attachments || [],
-                summary: create(SummarySchema, {
-                    startTime: timestampFromDate(startTime),
-                    totalDuration: msToDuration(duration),
-                    metadata: cleanObject({
-                        ...this.getCommonMetadata(recordingTitle, "Unknown", launchOptions, mergedPrefs, duration, extension),
-                        error: err.message,
-                        stack: err.stack,
                     })
-                })
-            });
-            await context.sendStatus({
-                state: TestState.FAILED,
-                message: `Execution failed: ${err.message}`
-            });
-        } finally {
-            if (browser) {
-                await browser.close().catch(e => console.error("[PuppeteerReplay] Error closing browser:", e));
-            }
-            if (userDataDir) {
-                try {
-                    fs.rmSync(userDataDir, { recursive: true, force: true });
-                } catch (e) {
-                    console.error("[PuppeteerReplay] Error cleaning up userDataDir:", e);
+                });
+                await context.sendStatus({
+                    state: TestState.COMPLETED,
+                    message: "Execution cycle finished."
+                });
+            } catch (err: any) {
+                console.error(`[PuppeteerReplay Error] ${err.message}`);
+                const endTime = new Date();
+                const duration = endTime.getTime() - startTime.getTime();
+
+                // Try to add a failed report for the current step if it failed
+                if (extension && extension.currentStep) {
+                    const lastReport = extension.reports[extension.reports.length - 1];
+                    const currentStepDetail = extension.getStepDetail(extension.currentStep);
+                    
+                    if (!lastReport || lastReport.name !== currentStepDetail) {
+                        extension.reports.push(create(StepReportSchema, {
+                            name: currentStepDetail,
+                            status: StepStatus.FAILED,
+                            summary: create(SummarySchema, {
+                                startTime: timestampFromDate(new Date(extension.stepStartTime || Date.now())),
+                                totalDuration: msToDuration(Date.now() - (extension.stepStartTime || Date.now())),
+                                metadata: cleanObject({
+                                    step: extension.currentStep,
+                                    error: err.message
+                                })
+                            })
+                        }));
+                    }
+                }
+
+                await context.sendResult({
+                    status: {
+                        state: TestState.FAILED,
+                        message: `Replay failed: ${err.message}`
+                    },
+                    reports: extension?.reports || [],
+                    attachments: extension?.attachments || [],
+                    summary: create(SummarySchema, {
+                        startTime: timestampFromDate(startTime),
+                        totalDuration: msToDuration(duration),
+                        metadata: cleanObject({
+                            ...this.getCommonMetadata(recordingTitle, "Unknown", launchOptions, mergedPrefs, duration, extension),
+                            error: err.message,
+                            stack: err.stack,
+                        })
+                    })
+                });
+                await context.sendStatus({
+                    state: TestState.FAILED,
+                    message: `Execution failed: ${err.message}`
+                });
+            } finally {
+                if (browser) {
+                    await browser.close().catch(e => console.error("[PuppeteerReplay] Error closing browser:", e));
+                }
+                if (userDataDir) {
+                    try {
+                        fs.rmSync(userDataDir, { recursive: true, force: true });
+                    } catch (e) {
+                        console.error("[PuppeteerReplay] Error cleaning up userDataDir:", e);
+                    }
                 }
             }
+        } finally {
+            browserQueue.release(sessionId);
         }
     }
 
