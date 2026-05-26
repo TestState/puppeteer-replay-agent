@@ -71,6 +71,7 @@ ENV DBUS_SESSION_BUS_ADDRESS=/dev/null
 # Copy built library and agent
 COPY --from=build --chown=node:node /workspace/client-node /app/client-node
 COPY --from=build --chown=node:node /workspace/puppeteer-agent /app/puppeteer-agent
+RUN chmod +x /app/puppeteer-agent/entrypoint.sh
 
 USER node
 WORKDIR /app/puppeteer-agent
@@ -79,5 +80,5 @@ WORKDIR /app/puppeteer-agent
 ENV HUB_URL=http://cms:9000
 ENV CLIENT_NAME=DockerPuppeteerAgent
 
-# Run the compiled JavaScript directly with Node under xvfb-run for virtual display support
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1024x768x24", "node", "dist/index.js"]
+ENTRYPOINT ["/app/puppeteer-agent/entrypoint.sh"]
+CMD ["node", "dist/index.js"]
