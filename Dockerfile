@@ -19,10 +19,10 @@ RUN npm install /workspace/client-node --no-save && npm install && npm run build
 FROM node:22-slim
 WORKDIR /app
 
-# Install Chromium and its required dependencies
-# Using the system-provided chromium ensures that all shared libraries are correctly mapped
+# Install Chrome and its required dependencies
+# We use Google Chrome Stable (directly from Google) instead of Debian's outdated chromium package
+# to ensure compatibility with the Puppeteer version we depend on.
 RUN apt-get update && apt-get install -y \
-    chromium \
     xvfb \
     xauth \
     fonts-liberation \
@@ -63,9 +63,16 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
-# Environment variables to configure Puppeteer to use the system Chromium
+# Install Google Chrome Stable from the official repository
+# This ensures the Chrome version is compatible with our Puppeteer version
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
+    apt-get update && apt-get install -y google-chrome-stable --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+# Environment variables to configure Puppeteer to use the system Google Chrome
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 ENV DBUS_SESSION_BUS_ADDRESS=/dev/null
 
 # Copy built library and agent
